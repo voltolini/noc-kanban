@@ -243,7 +243,7 @@
       <button id="nav-dash">Dashboard</button>
     </div>
     <div class="spacer"></div>
-    <button class="btn ghost" id="btn-reset">Limpar dados</button>
+    <button class="btn ghost" id="btn-reset">Recarregar</button>
     <button class="btn" id="btn-new-top">+ Nova tarefa</button>
   </div>
 
@@ -280,7 +280,6 @@ const IMPACTS = [
   {id:'Crítico', n:4},
 ];
 
-const STORAGE_KEY = 'noc-kanban-board-v1';
 let board = { tasks: [] };
 let dragTaskId = null;
 let currentPage = 'board';
@@ -319,86 +318,69 @@ function fmtDT(v){
   return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 }
 
+/* ---------------- Supabase config ---------------- */
+// 1) Crie um projeto em https://supabase.com e rode o SQL de setup (schema fornecido à parte).
+// 2) Em Settings > API, copie a "Project URL" e a chave "anon public" e cole abaixo.
+const SUPABASE_URL = 'https://SEU-PROJETO.supabase.co';
+const SUPABASE_ANON_KEY = 'SUA-CHAVE-ANON-PUBLICA';
+
+async function sb(path, options={}){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: options.method || 'GET',
+    body: options.body,
+    cache: 'no-store',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': options.prefer || 'return=representation',
+    }
+  });
+  if(!res.ok){
+    const errText = await res.text().catch(()=> '');
+    throw new Error(`Supabase ${res.status}: ${errText || res.statusText}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+/* Conversão entre o modelo usado na tela e as colunas do Postgres.
+   "column" vira "status" no banco porque COLUMN é palavra reservada no Postgres. */
+function toDbTask(t){
+  return {
+    title: t.title, description: t.description||'', responsavel: t.responsavel||'',
+    priority: t.priority, impact: t.impact, ticket: t.ticket||'',
+    estimated_hours: t.estimatedHours||0, tags: t.tags||[], status: t.column,
+  };
+}
+function fromDbTask(row){
+  return {
+    id: row.id, title: row.title, description: row.description, responsavel: row.responsavel,
+    priority: row.priority, impact: row.impact, ticket: row.ticket, estimatedHours: row.estimated_hours,
+    tags: row.tags||[], column: row.status, createdAt: row.created_at,
+    apontamentos: (row.apontamentos||[]).map(fromDbApont),
+  };
+}
+function fromDbApont(row){
+  return { id: row.id, responsavel: row.responsavel, start: row.start_time, end: row.end_time, description: row.description };
+}
+
 /* ---------------- Persistence ---------------- */
 async function loadBoard(){
   const boardEl = document.getElementById('board');
-  boardEl.innerHTML = '<div class="loading-note">Carregando quadro…</div>';
+  boardEl.innerHTML = '<div class="loading-note">Carregando quadro do Supabase…</div>';
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
-    if(res && res.value){
-      board = JSON.parse(res.value);
-    } else {
-      board = { tasks: seedTasks() };
-      await saveBoard();
-    }
+    const rows = await sb('tasks?select=*,apontamentos(*)&order=created_at.asc');
+    board = { tasks: (rows||[]).map(fromDbTask) };
   }catch(err){
-    board = { tasks: seedTasks() };
+    boardEl.innerHTML = `<div class="loading-note">
+      Não foi possível conectar ao Supabase.<br>
+      Confira SUPABASE_URL / SUPABASE_ANON_KEY no início do &lt;script&gt; e as policies de RLS das tabelas <code>tasks</code> e <code>apontamentos</code>.<br>
+      <span style="color:var(--sev-crit)">${escapeHtml(err.message)}</span>
+    </div>`;
+    return;
   }
   renderAll();
-}
-
-async function saveBoard(){
-  try{
-    await window.storage.set(STORAGE_KEY, JSON.stringify(board), false);
-  }catch(err){
-    console.error('Falha ao salvar quadro:', err);
-  }
-}
-
-function seedTasks(){
-  const now = Date.now();
-  const iso = (h)=> new Date(now - h*3600000).toISOString().slice(0,16);
-  return [
-    {
-      id: uid('t'), title:'Ajustar template Zabbix dos APs', responsavel:'André Silva',
-      description:'Revisar itens de disponibilidade do template de APs FortiSwitch — falsos positivos em VLAN 1100/1101.',
-      priority:'Alta', impact:'Alto', ticket:'33546498', estimatedHours:4, tags:['zabbix','rede'],
-      column:'IN_PROGRESS', createdAt: iso(30),
-      apontamentos:[
-        {id:uid('a'), responsavel:'André Silva', start:iso(6), end:iso(4.5), description:'Investigação inicial dos ifIndexes.'}
-      ]
-    },
-    {
-      id: uid('t'), title:'Corrigir dispatcher Zabbix→SMAX grupo Saúde', responsavel:'Conrado Reis',
-      description:'Ajustar mapeamento de grupo solucionador para incidentes do HMC/HUC/HNSL.',
-      priority:'Crítica', impact:'Crítico', ticket:'33547012', estimatedHours:6, tags:['smax','automação'],
-      column:'TODO', createdAt: iso(20), apontamentos:[]
-    },
-    {
-      id: uid('t'), title:'Hardening MariaDB — proxy o-vm-zbix-p01', responsavel:'Leandro Costa',
-      description:'Eliminar login root automático e revisar debian-start no proxy Zabbix.',
-      priority:'Média', impact:'Médio', ticket:'', estimatedHours:3, tags:['segurança','zabbix'],
-      column:'REVIEW', createdAt: iso(50),
-      apontamentos:[
-        {id:uid('a'), responsavel:'Leandro Costa', start:iso(10), end:iso(8.2), description:'Aplicado hardening e testado reinício do serviço.'}
-      ]
-    },
-    {
-      id: uid('t'), title:'Dashboard Grafana — Servidores Apex/Cloud', responsavel:'Evandro Evangelista',
-      description:'Publicar dashboard importável para host groups Dell (Apex) e Atos (Cloud) usando datasource Zabbix.',
-      priority:'Baixa', impact:'Baixo', ticket:'33544210', estimatedHours:5, tags:['grafana','dashboard'],
-      column:'DELIVERED', createdAt: iso(80),
-      apontamentos:[
-        {id:uid('a'), responsavel:'Evandro Evangelista', start:iso(40), end:iso(37), description:'Construção do JSON do dashboard.'},
-        {id:uid('a'), responsavel:'Evandro Evangelista', start:iso(20), end:iso(18.5), description:'Ajustes finos de thresholds.'}
-      ]
-    },
-    {
-      id: uid('t'), title:'Correlação de eventos — campus CTA1', responsavel:'Diego Voltolini',
-      description:'Tabelas de dependência entre Internet, DC, MAN, Access e APs para o campus PUCPR CTA1.',
-      priority:'Média', impact:'Alto', ticket:'', estimatedHours:8, tags:['pucpr','documentação'],
-      column:'DONE', createdAt: iso(200),
-      apontamentos:[
-        {id:uid('a'), responsavel:'Diego Voltolini', start:iso(100), end:iso(93), description:'Mapeamento dos 18 cenários de falha.'}
-      ]
-    },
-    {
-      id: uid('t'), title:'Analisar cobertura de automação — grupos especializados', responsavel:'',
-      description:'Levantar incidentes sem automação Zabbix entre jan–jun e propor plano de ação.',
-      priority:'Média', impact:'Médio', ticket:'', estimatedHours:6, tags:['roi','automação'],
-      column:'BACKLOG', createdAt: iso(5), apontamentos:[]
-    },
-  ];
 }
 
 /* ---------------- Rendering: Board ---------------- */
@@ -423,12 +405,22 @@ function renderBoard(){
 
     body.addEventListener('dragover', e=>{ e.preventDefault(); body.classList.add('drag-over'); });
     body.addEventListener('dragleave', ()=> body.classList.remove('drag-over'));
-    body.addEventListener('drop', e=>{
+    body.addEventListener('drop', async e=>{
       e.preventDefault(); body.classList.remove('drag-over');
       if(dragTaskId){
         const task = board.tasks.find(t=>t.id===dragTaskId);
-        if(task){ task.column = col.id; saveBoard(); renderBoard(); }
+        const taskIdToMove = dragTaskId;
         dragTaskId = null;
+        if(task){
+          const prevCol = task.column;
+          task.column = col.id; renderBoard();
+          try{
+            await sb(`tasks?id=eq.${taskIdToMove}`, {method:'PATCH', body: JSON.stringify({status: col.id})});
+          }catch(err){
+            task.column = prevCol; renderBoard();
+            alert('Não foi possível mover a tarefa no Supabase: ' + err.message);
+          }
+        }
       }
     });
     colEl.querySelector('.col-add').addEventListener('click', ()=> openTaskEditor(null, col.id));
@@ -546,7 +538,7 @@ function openTaskEditor(taskId, defaultCol){
   wrap.querySelector('#f-cancel').addEventListener('click', close);
   wrap.addEventListener('mousedown', e=>{ if(e.target===wrap) close(); });
 
-  wrap.querySelector('#f-save').addEventListener('click', ()=>{
+  wrap.querySelector('#f-save').addEventListener('click', async ()=>{
     const title = wrap.querySelector('#f-title').value.trim();
     if(!title){ wrap.querySelector('#f-title').style.borderColor = 'var(--sev-crit)'; return; }
     const tags = wrap.querySelector('#f-tags').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -561,14 +553,23 @@ function openTaskEditor(taskId, defaultCol){
       estimatedHours: parseFloat(wrap.querySelector('#f-hours').value) || 0,
       tags,
     };
-    if(existing){
-      Object.assign(existing, data);
-    } else {
-      board.tasks.push(Object.assign({id:uid('t'), createdAt:new Date().toISOString(), apontamentos:[]}, data));
+    const saveBtn = wrap.querySelector('#f-save');
+    saveBtn.textContent = 'Salvando…'; saveBtn.disabled = true;
+    try{
+      if(existing){
+        const [row] = await sb(`tasks?id=eq.${existing.id}`, {method:'PATCH', body: JSON.stringify(toDbTask(data))});
+        Object.assign(existing, fromDbTask({...row, apontamentos: existing.apontamentos}));
+      } else {
+        const [row] = await sb('tasks', {method:'POST', body: JSON.stringify(toDbTask(data))});
+        board.tasks.push(fromDbTask({...row, apontamentos: []}));
+      }
+      renderAll();
+      close();
+    }catch(err){
+      alert('Erro ao salvar no Supabase: ' + err.message);
+      saveBtn.textContent = existing ? 'Salvar alterações' : 'Criar no Backlog';
+      saveBtn.disabled = false;
     }
-    saveBoard();
-    renderAll();
-    close();
   });
 }
 
@@ -664,32 +665,48 @@ function openTaskDetail(taskId){
       });
     }
     list.querySelectorAll('.del').forEach(btn=>{
-      btn.addEventListener('click', ()=>{
-        task.apontamentos = (task.apontamentos||[]).filter(a=>a.id!==btn.dataset.id);
-        saveBoard(); build();
+      btn.addEventListener('click', async ()=>{
+        try{
+          await sb(`apontamentos?id=eq.${btn.dataset.id}`, {method:'DELETE', prefer:'return=minimal'});
+          task.apontamentos = (task.apontamentos||[]).filter(a=>a.id!==btn.dataset.id);
+          build();
+        }catch(err){
+          alert('Erro ao excluir apontamento: ' + err.message);
+        }
       });
     });
 
     wrap.querySelector('.x').addEventListener('click', ()=>{ wrap.remove(); renderAll(); });
     wrap.querySelector('#t-close').addEventListener('click', ()=>{ wrap.remove(); renderAll(); });
     wrap.querySelector('#t-edit').addEventListener('click', ()=>{ wrap.remove(); openTaskEditor(task.id); });
-    wrap.querySelector('#t-delete').addEventListener('click', ()=>{
+    wrap.querySelector('#t-delete').addEventListener('click', async ()=>{
       if(confirm('Excluir esta tarefa e todos os apontamentos vinculados?')){
-        board.tasks = board.tasks.filter(t=>t.id!==task.id);
-        saveBoard(); wrap.remove(); renderAll();
+        try{
+          await sb(`tasks?id=eq.${task.id}`, {method:'DELETE', prefer:'return=minimal'});
+          board.tasks = board.tasks.filter(t=>t.id!==task.id);
+          wrap.remove(); renderAll();
+        }catch(err){
+          alert('Erro ao excluir tarefa: ' + err.message);
+        }
       }
     });
-    wrap.querySelector('#a-add').addEventListener('click', ()=>{
+    wrap.querySelector('#a-add').addEventListener('click', async ()=>{
       const resp = wrap.querySelector('#a-resp').value.trim() || task.responsavel || '';
       const start = wrap.querySelector('#a-start').value;
       const end = wrap.querySelector('#a-end').value;
       const desc = wrap.querySelector('#a-desc').value.trim();
       if(!start){ wrap.querySelector('#a-start').style.borderColor = 'var(--sev-crit)'; return; }
       if(end && new Date(end) <= new Date(start)){ wrap.querySelector('#a-end').style.borderColor = 'var(--sev-crit)'; return; }
-      task.apontamentos = task.apontamentos || [];
-      task.apontamentos.push({ id: uid('a'), responsavel: resp, start, end, description: desc });
-      saveBoard();
-      build();
+      try{
+        const [row] = await sb('apontamentos', {method:'POST', body: JSON.stringify({
+          task_id: task.id, responsavel: resp, start_time: start, end_time: end || null, description: desc
+        })});
+        task.apontamentos = task.apontamentos || [];
+        task.apontamentos.push(fromDbApont(row));
+        build();
+      }catch(err){
+        alert('Erro ao lançar apontamento: ' + err.message);
+      }
     });
   }
 
@@ -797,13 +814,7 @@ function showPage(page){
 document.getElementById('nav-board').addEventListener('click', ()=> showPage('board'));
 document.getElementById('nav-dash').addEventListener('click', ()=> showPage('dash'));
 document.getElementById('btn-new-top').addEventListener('click', ()=> openTaskEditor(null, 'BACKLOG'));
-document.getElementById('btn-reset').addEventListener('click', ()=>{
-  if(confirm('Isso apaga todas as tarefas e apontamentos salvos e recarrega os dados de exemplo. Continuar?')){
-    board = { tasks: seedTasks() };
-    saveBoard();
-    renderAll();
-  }
-});
+document.getElementById('btn-reset').addEventListener('click', ()=> loadBoard());
 
 loadBoard();
 })();
