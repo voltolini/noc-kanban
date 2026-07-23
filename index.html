@@ -156,7 +156,8 @@
   .field-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
   .field-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
   .hint{font-size:10.5px;color:var(--text-low);margin-top:4px;}
-  .modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid var(--border-soft);}
+  .modal-foot{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid var(--border-soft);}
+  .modal-foot #t-delete{margin-right:auto;}
 
   .sect-title{
     font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-low);
@@ -168,6 +169,7 @@
   }
   .apont-row .field{margin-bottom:0;}
   .apont-row label{font-size:10px;}
+  .apont-row #a-add{white-space:nowrap;}
   .apont-list{display:flex;flex-direction:column;gap:7px;margin-bottom:10px;}
   .apont-item{
     background:var(--bg-card);border:1px solid var(--border-soft);border-radius:7px;padding:9px 11px;
@@ -227,6 +229,12 @@
 
   .loading-note{color:var(--text-low);font-size:12px;padding:30px;text-align:center;}
   @media (max-width:980px){.dash-grid{grid-template-columns:repeat(2,1fr);} .panels{grid-template-columns:1fr;}}
+  @media (max-width:620px){
+    .field-row,.field-row3{grid-template-columns:1fr;}
+    .apont-row{grid-template-columns:1fr 1fr;}
+    .apont-row #a-add{grid-column:1/-1;width:100%;height:38px;}
+    .dash-grid{grid-template-columns:1fr 1fr;}
+  }
 </style>
 </head>
 <body>

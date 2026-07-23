@@ -1,6 +1,5 @@
 -- Rode este script no SQL Editor do seu projeto Supabase (Database > SQL Editor).
-
-create extension if not exists pgcrypto;
+-- gen_random_uuid() já é nativo no Postgres 13+ usado pelo Supabase, não precisa de extensão.
 
 create table if not exists public.tasks (
   id uuid primary key default gen_random_uuid(),
@@ -39,3 +38,6 @@ create policy "tasks_all" on public.tasks
 
 create policy "apontamentos_all" on public.apontamentos
   for all using (true) with check (true);
+
+-- Depois de rodar, force o PostgREST a atualizar o cache de schema:
+notify pgrst, 'reload schema';
